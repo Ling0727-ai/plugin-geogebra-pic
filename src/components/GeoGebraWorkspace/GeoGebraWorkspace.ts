@@ -12,6 +12,9 @@ import {
 
 let scriptPromise: Promise<void> | undefined
 
+const PNG_EXPORT_SCALE = 2
+const BASE_DPI = 96
+
 function loadGeoGebraScript(): Promise<void> {
   if (window.GGBApplet !== undefined) return Promise.resolve()
   if (scriptPromise !== undefined) return scriptPromise
@@ -237,7 +240,8 @@ export function useGeoGebraWorkspace(
     saveConstruction()
   }, [saveConstruction, syncObjects])
   const exportPng = useCallback(() => {
-    const value = apiRef.current?.getPNGBase64(2, false, 180)
+    // DPI tracks the raster multiplier so the download keeps the on-screen physical size.
+    const value = apiRef.current?.getPNGBase64(PNG_EXPORT_SCALE, false, BASE_DPI * PNG_EXPORT_SCALE)
     if (value !== undefined) downloadBase64('geogebra-drawing.png', 'image/png', value)
   }, [])
   const exportSvg = useCallback(() => {

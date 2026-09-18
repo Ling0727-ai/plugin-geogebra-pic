@@ -19,6 +19,11 @@ export interface GeoGebraRenderRequest {
   readonly yMax: number
   readonly pngScale: number
   readonly transparent: boolean
+  /** Axis tick numbers. Off by default: at 400-800 px the default labels crowd the axes. */
+  readonly axisNumbers: boolean
+  /** Distance between axis ticks; a coarser interval keeps re-enabled tick numbers readable. */
+  readonly axisStep?: number
+  readonly grid: boolean
   readonly signal: AbortSignal
   readonly chromePath?: string
 }
@@ -26,6 +31,12 @@ export interface GeoGebraRenderRequest {
 export interface GeoGebraRenderResult {
   readonly objects: readonly string[]
   readonly version: string
+  /** Logical display size in CSS pixels: the size the figure is authored for and embedded at. */
+  readonly display: { readonly width: number; readonly height: number }
+  /** Pixel size and DPI metadata of the exported PNG, when PNG was requested. */
+  readonly png?: { readonly width: number; readonly height: number; readonly dpi: number }
+  /** Smallest explicit text size in the construction, when any SetFontSize directive was used. */
+  readonly minFontPx?: number
   readonly outputs: Partial<Record<GeoGebraFormat, string>>
 }
 
@@ -35,8 +46,42 @@ interface FontSizeDirective {
 }
 
 const FONT_SIZE_DIRECTIVE = /^\s*SetFontSize\(\s*([A-Za-z][A-Za-z0-9_]*)\s*,\s*(\d+(?:\.\d+)?)\s*\)\s*$/u
-const MIN_TEXT_SIZE_PX = 10
+/** Absolute floor for text that must survive embedding at 400-800 px. */
+export const MIN_TEXT_SIZE_PX = 12
 const MAX_TEXT_SIZE_PX = 48
+/**
+ * GeoGebra's applet frame draws a 1 px border on every side, and the exported graphics view is the
+ * frame's inner box. The viewport is therefore enlarged by this amount so the export matches the
+ * requested display size exactly.
+ */
+const FRAME_BORDER_PX = 1
+/** Embedded images are placed by their DPI metadata, so DPI must track the raster multiplier. */
+const BASE_DPI = 96
+
+function pngMetadata(base64: string): { width: number; height: number; dpi: number } {
+  const buffer = Buffer.from(base64, 'base64')
+  if (buffer.length < 24 || buffer.toString('ascii', 12, 16) !== 'IHDR') {
+    throw new Error('GeoGebra PNG output is not a valid PNG')
+  }
+  let offset = 8
+  let dpi = BASE_DPI
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset)
+    const type = buffer.toString('ascii', offset + 4, offset + 8)
+    if (type === 'pHYs' && offset + 17 <= buffer.length && buffer.readUInt8(offset + 16) === 1) {
+      dpi = Math.round(buffer.readUInt32BE(offset + 8) * 0.0254)
+    }
+    if (type === 'IEND') break
+    offset += 12 + length
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20), dpi }
+}
+
+/** A viewBox makes the SVG scale losslessly when a consumer embeds it at another width. */
+function withViewBox(svg: string, width: number, height: number): string {
+  if (/<svg\b[^>]*\bviewBox=/u.test(svg)) return svg
+  return svg.replace(/<svg\b([^>]*)>/u, (_match, attributes: string) => `<svg${attributes} viewBox="0 0 ${width} ${height}">`)
+}
 
 function splitFontSizeDirectives(commands: readonly string[] | undefined): {
   readonly commands: readonly string[] | undefined
@@ -84,7 +129,8 @@ function persistGgbFontSizes(base64: string, directives: readonly FontSizeDirect
   return Buffer.from(zipSync(archive, { level: 6 })).toString('base64')
 }
 
-const HTML = `<!doctype html>
+function html(width: number, height: number): string {
+  return `<!doctype html>
 <html><head><meta charset="utf-8"><style>html,body,#app{width:100%;height:100%;margin:0;overflow:hidden}</style>
 <script src="https://www.geogebra.org/apps/deployggb.js"></script></head>
 <body><div id="app"></div><script>
@@ -92,13 +138,14 @@ window.__ggbError = null;
 window.addEventListener('error', event => { window.__ggbError = event.message || 'page error'; });
 function boot() {
   if (typeof GGBApplet !== 'function') { setTimeout(boot, 50); return; }
-  const applet = new GGBApplet({ appName:'classic', width:1200, height:800, showToolBar:false,
+  const applet = new GGBApplet({ appName:'classic', width:${width}, height:${height}, perspective:'G', showToolBar:false,
     showMenuBar:false, showAlgebraInput:false, showResetIcon:false, showZoomButtons:false,
     enableRightClick:false, language:'en', appletOnLoad(api) { window.ggbApplet = api; window.__ggbReady = true; } }, true);
   applet.inject('app');
 }
 boot();
 </script></body></html>`
+}
 
 function chromeCandidates(): string[] {
   if (process.platform === 'win32') return [
@@ -209,15 +256,20 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
   if ((request.commands === undefined) === (request.ggbBase64 === undefined)) {
     throw new Error('Provide exactly one of commands or ggbBase64')
   }
+  // Validate directives before booting the browser so bad input fails fast and offline.
+  const prepared = splitFontSizeDirectives(request.commands)
   const root = await mkdtemp(join(tmpdir(), 'dsh-geogebra-'))
   const profile = join(root, 'profile')
   const htmlPath = join(root, 'index.html')
-  await writeFile(htmlPath, HTML, 'utf8')
+  // The applet is told to fill a frame whose inner box is exactly the requested display size.
+  const viewportWidth = request.width + FRAME_BORDER_PX * 2
+  const viewportHeight = request.height + FRAME_BORDER_PX * 2
+  await writeFile(htmlPath, html(viewportWidth, viewportHeight), 'utf8')
   const chrome = findChrome(request.chromePath)
   const child = spawn(chrome, [
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-    '--remote-debugging-port=0', `--user-data-dir=${profile}`, `--window-size=${request.width},${request.height}`,
-    new URL(`file:///${htmlPath.replaceAll('\\', '/')}`).href,
+    '--remote-debugging-port=0', `--user-data-dir=${profile}`, `--window-size=${viewportWidth},${viewportHeight}`,
+    'about:blank',
   ], { stdio: 'ignore', windowsHide: true })
   const cancel = (): void => { terminate(child) }
   request.signal.addEventListener('abort', cancel, { once: true })
@@ -229,14 +281,23 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
     if (page === undefined) throw new Error('Chrome did not expose a page target')
     cdp = await CdpClient.connect(page.webSocketDebuggerUrl, request.signal)
     await cdp.call('Runtime.enable')
-    for (let attempt = 0; attempt < 300; attempt += 1) {
+    // Pin the CSS viewport before the applet boots: --window-size alone yields a smaller viewport
+    // (window chrome and display scaling), which silently changes the exported figure size.
+    await cdp.call('Page.enable')
+    await cdp.call('Emulation.setDeviceMetricsOverride', {
+      width: viewportWidth, height: viewportHeight, deviceScaleFactor: 1, mobile: false,
+    })
+    await cdp.call('Page.navigate', { url: new URL(`file:///${htmlPath.replaceAll('\\', '/')}`).href })
+    // The applet script is fetched from geogebra.org on every render, so allow a slow CDN.
+    for (let attempt = 0; attempt < 600; attempt += 1) {
       const state = await cdp.evaluate<{ ready: boolean; error: string | null }>('({ ready: window.__ggbReady === true, error: window.__ggbError })')
+        .catch(() => ({ ready: false, error: null }))
       if (typeof state.error === 'string' && state.error.length > 0) throw new Error(`GeoGebra page failed: ${state.error}`)
       if (state.ready) break
-      if (attempt === 299) throw new Error('GeoGebra applet did not become ready')
+      if (attempt === 599) throw new Error('GeoGebra applet did not become ready')
       await delay(100, request.signal)
     }
-    const prepared = splitFontSizeDirectives(request.commands)
+    const dpi = Math.round(BASE_DPI * request.pngScale)
     const payload = JSON.stringify({
       commands: prepared.commands,
       fontSizes: prepared.fontSizes,
@@ -244,9 +305,13 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
       formats: request.formats,
       view: [request.xMin, request.xMax, request.yMin, request.yMax],
       pngScale: request.pngScale,
+      dpi,
       transparent: request.transparent,
+      axisNumbers: request.axisNumbers,
+      axisStep: request.axisStep,
+      grid: request.grid,
     })
-    const rendered = await cdp.evaluate<GeoGebraRenderResult>(`(async () => {
+    const rendered = await cdp.evaluate<Omit<GeoGebraRenderResult, 'display' | 'minFontPx' | 'png'>>(`(async () => {
       const input = ${payload}; const api = window.ggbApplet;
       api.setErrorDialogsActive(false);
       if (input.ggbBase64) await new Promise(resolve => api.setBase64(input.ggbBase64, resolve));
@@ -255,20 +320,39 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
         if (api.getObjectType(directive.label) !== 'text') throw new Error('SetFontSize target is not a text object: ' + directive.label);
         api.setFont(directive.label, directive.pixels, false, false);
         const multiplier = Math.round((directive.pixels / 16) * 10000) / 10000;
-        if (!api.getXML(directive.label).includes('sizeM="' + multiplier + '"')) throw new Error('SetFontSize did not persist for ' + directive.label);
+        // GeoGebra omits <font> entirely at the default 16 px, so absence only verifies that size.
+        const font = /<font\\b[^>]*\\/>/u.exec(api.getXML(directive.label));
+        const persisted = font === null ? multiplier === 1 : font[0].includes('sizeM="' + multiplier + '"');
+        if (!persisted) throw new Error('SetFontSize did not persist for ' + directive.label);
       }
       api.setCoordSystem(...input.view); api.setUndoPoint();
+      api.setGraphicsOptions(1, {
+        grid: input.grid,
+        axes: { x: { showNumbers: input.axisNumbers }, y: { showNumbers: input.axisNumbers } },
+      });
+      if (typeof input.axisStep === 'number') api.setAxisSteps(1, input.axisStep, input.axisStep);
       const outputs = {};
-      if (input.formats.includes('png')) outputs.png = api.getPNGBase64(input.pngScale, input.transparent, 180);
+      if (input.formats.includes('png')) outputs.png = api.getPNGBase64(input.pngScale, input.transparent, input.dpi);
       if (input.formats.includes('svg')) outputs.svg = await new Promise(resolve => api.exportSVG(resolve));
       if (input.formats.includes('ggb')) outputs.ggb = await new Promise(resolve => api.getBase64(resolve));
       return { objects: api.getAllObjectNames(), version: api.getVersion(), outputs };
     })()`)
     const rawGgb = rendered.outputs.ggb
-    if (rawGgb === undefined || prepared.fontSizes.length === 0) return rendered
+    const outputs = rawGgb === undefined || prepared.fontSizes.length === 0
+      ? { ...rendered.outputs }
+      : { ...rendered.outputs, ggb: persistGgbFontSizes(rawGgb, prepared.fontSizes) }
+    const rawSvg = outputs.svg
+    if (rawSvg !== undefined) outputs.svg = withViewBox(rawSvg, request.width, request.height)
+    const rawPng = outputs.png
     return {
-      ...rendered,
-      outputs: { ...rendered.outputs, ggb: persistGgbFontSizes(rawGgb, prepared.fontSizes) },
+      objects: rendered.objects,
+      version: rendered.version,
+      display: { width: request.width, height: request.height },
+      ...(rawPng === undefined ? {} : { png: pngMetadata(rawPng) }),
+      ...(prepared.fontSizes.length === 0
+        ? {}
+        : { minFontPx: Math.min(...prepared.fontSizes.map(directive => directive.pixels)) }),
+      outputs,
     }
   } finally {
     request.signal.removeEventListener('abort', cancel)

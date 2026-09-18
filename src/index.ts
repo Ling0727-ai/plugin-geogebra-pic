@@ -6,7 +6,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-skill'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { renderGeoGebra, type GeoGebraFormat, type GeoGebraRenderResult } from './host/renderer.ts'
+import { renderGeoGebra, MIN_TEXT_SIZE_PX, type GeoGebraFormat, type GeoGebraRenderResult } from './host/renderer.ts'
 
 export const name = 'geogebra-pic'
 export const inject = ['tools', 'skills']
@@ -31,11 +31,33 @@ const OUTPUT_SCHEMA = {
     },
     objects: { type: 'array', required: true, items: { type: 'string' } },
     version: { type: 'string', required: true },
+    display: {
+      type: 'object', required: true, additionalProperties: false,
+      properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } },
+    },
+    png: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        width: { type: 'integer', required: true },
+        height: { type: 'integer', required: true },
+        dpi: { type: 'integer', required: true },
+      },
+    },
+    minFontPx: { type: 'number' },
+    minLegibleWidth: { type: 'integer' },
   },
 } as const
 
 type OutputFile = { path: string; format: GeoGebraFormat; bytes: number }
-type ToolOutput = { files: OutputFile[]; objects: string[]; version: string }
+type ToolOutput = {
+  files: OutputFile[]
+  objects: string[]
+  version: string
+  display: { width: number; height: number }
+  png?: { width: number; height: number; dpi: number }
+  minFontPx?: number
+  minLegibleWidth?: number
+}
 
 function sessionCwd(exec: { readonly agent?: { readonly session: { readonly header: { readonly cwd?: string } } } }): string {
   const cwd = exec.agent?.session.header.cwd
@@ -65,8 +87,16 @@ function formats(values: readonly string[] | undefined, defaults: readonly GeoGe
   return selected
 }
 
+/**
+ * Figures are authored at their embedded display size, not at an oversized canvas. A figure that is
+ * drawn at 1200 px and then dropped into a document at 600 px halves every label.
+ */
+const DEFAULT_WIDTH = 800
+const DEFAULT_HEIGHT = 600
+const DEFAULT_PNG_SCALE = 1
+
 function dimensions(width: number | undefined, height: number | undefined): { width: number; height: number } {
-  const resolved = { width: width ?? 1200, height: height ?? 800 }
+  const resolved = { width: width ?? DEFAULT_WIDTH, height: height ?? DEFAULT_HEIGHT }
   if (!Number.isInteger(resolved.width) || resolved.width < 320 || resolved.width > 2400
     || !Number.isInteger(resolved.height) || resolved.height < 240 || resolved.height > 1800) {
     throw new Error('width must be 320-2400 and height must be 240-1800')
@@ -78,6 +108,46 @@ function view(args: { x_min?: number; x_max?: number; y_min?: number; y_max?: nu
   const value = { xMin: args.x_min ?? -10, xMax: args.x_max ?? 10, yMin: args.y_min ?? -7, yMax: args.y_max ?? 7 }
   if (!(value.xMin < value.xMax && value.yMin < value.yMax)) throw new Error('Coordinate bounds must satisfy min < max')
   return value
+}
+
+function pngScaleOf(value: number | undefined): number {
+  const scale = value ?? DEFAULT_PNG_SCALE
+  if (!Number.isFinite(scale) || scale < 0.5 || scale > 4) throw new Error('png_scale must be from 0.5 to 4')
+  return scale
+}
+
+function axisStepOf(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined
+  if (!Number.isFinite(value) || value <= 0 || value > 1000) throw new Error('axis_step must be a positive number up to 1000')
+  return value
+}
+
+interface FigureArgs {
+  width?: number
+  height?: number
+  x_min?: number
+  x_max?: number
+  y_min?: number
+  y_max?: number
+  png_scale?: number
+  transparent?: boolean
+  axis_numbers?: boolean
+  axis_step?: number
+  grid?: boolean
+}
+
+/** Shared figure options for both tools; axis tick numbers and the grid are off for embed sizes. */
+function figureOptions(args: FigureArgs) {
+  const axisStep = axisStepOf(args.axis_step)
+  return {
+    ...dimensions(args.width, args.height),
+    ...view(args),
+    pngScale: pngScaleOf(args.png_scale),
+    transparent: args.transparent ?? false,
+    axisNumbers: args.axis_numbers ?? false,
+    grid: args.grid ?? false,
+    ...(axisStep === undefined ? {} : { axisStep }),
+  }
 }
 
 async function saveOutputs(
@@ -96,14 +166,31 @@ async function saveOutputs(
     await writeFile(path, data)
     files.push({ path, format, bytes: typeof data === 'string' ? Buffer.byteLength(data) : data.length })
   }
-  return { files, objects: [...rendered.objects], version: rendered.version }
+  const minFontPx = rendered.minFontPx
+  return {
+    files, objects: [...rendered.objects], version: rendered.version, display: rendered.display,
+    ...(rendered.png === undefined ? {} : { png: rendered.png }),
+    ...(minFontPx === undefined
+      ? {}
+      : { minFontPx, minLegibleWidth: Math.floor((rendered.display.width * MIN_TEXT_SIZE_PX) / minFontPx) }),
+  }
 }
 
 function renderedText(value: ToolOutput): string {
-  return [
+  const lines = [
     `GeoGebra ${value.version} created ${value.objects.length} object(s): ${value.objects.join(', ') || '(none)'}`,
-    ...value.files.map(file => `${file.format.toUpperCase()}: ${file.path} (${file.bytes} bytes)`),
-  ].join('\n')
+    `Display ${value.display.width} x ${value.display.height} px: author and embed at this width.`,
+  ]
+  if (value.minFontPx !== undefined && value.minLegibleWidth !== undefined) {
+    lines.push(`Smallest text ${value.minFontPx} px: keep the embedded width at or above ${value.minLegibleWidth} px so text stays at least ${MIN_TEXT_SIZE_PX} px.`)
+  }
+  for (const file of value.files) {
+    const detail = file.format === 'png' && value.png !== undefined
+      ? `${value.png.width} x ${value.png.height} px @ ${value.png.dpi} dpi, ${file.bytes} bytes`
+      : `${file.bytes} bytes`
+    lines.push(`${file.format.toUpperCase()}: ${file.path} (${detail})`)
+  }
+  return lines.join('\n')
 }
 
 export function apply(ctx: Context): void {
@@ -118,20 +205,23 @@ export function apply(ctx: Context): void {
   })
   ctx.tools.register(defineTool({
     name: 'geogebra_draw',
-    description: 'Create a GeoGebra construction from GeoGebra commands and export PNG, SVG, and/or an editable .ggb file. Use this for function plots, Euclidean geometry, conics, analytic geometry, sliders, loci, and publication-ready mathematical figures. Outputs are written inside the current Session workspace. Commands execute in one construction and may reference objects created by earlier commands. For every visible Text object, include the plugin directive SetFontSize(label, pixels) with an explicit 10-48 px size; it is applied through the GeoGebra Apps API and persisted in every export.',
+    description: 'Create a GeoGebra construction from GeoGebra commands and export PNG, SVG, and/or an editable .ggb file. Use this for function plots, Euclidean geometry, conics, analytic geometry, sliders, loci, and publication-ready mathematical figures. Outputs are written inside the current Session workspace. Commands execute in one construction and may reference objects created by earlier commands. The figure is authored at its embedded display size (default 800 x 600 px), so width is the size it is meant to be shown at; PNG DPI metadata matches the raster multiplier so documents insert it at that size. Axis tick numbers and the background grid are off by default because they crowd a 400-800 px figure. For every visible Text object, include the plugin directive SetFontSize(label, pixels) with an explicit 12-48 px size; it is applied through the GeoGebra Apps API and persisted in every export.',
     parameters: {
       commands: { type: 'array', required: true, items: { type: 'string' }, description: 'Ordered GeoGebra commands, for example ["F_1=(-3,0)", "F_2=(3,0)", "c=Ellipse(F_1,F_2,5)"].' },
       basename: { type: 'string', description: 'Output filename without extension; defaults to geogebra-drawing.' },
       output_dir: { type: 'string', description: 'Workspace-relative output directory; defaults to the workspace root.' },
       formats: { type: 'array', items: FORMAT_SCHEMA, description: 'Any of png, svg, ggb; defaults to all three.' },
-      width: { type: 'integer', description: 'Applet width from 320 to 2400; defaults to 1200.' },
-      height: { type: 'integer', description: 'Applet height from 240 to 1800; defaults to 800.' },
+      width: { type: 'integer', description: 'Logical display width in CSS px from 320 to 2400; defaults to 800. This is the width the figure is authored for and embedded at, so 400-800 is the usual range for notes, documents, and slides.' },
+      height: { type: 'integer', description: 'Logical display height in CSS px from 240 to 1800; defaults to 600.' },
       x_min: { type: 'number', description: 'Visible x-axis minimum; defaults to -10.' },
       x_max: { type: 'number', description: 'Visible x-axis maximum; defaults to 10.' },
       y_min: { type: 'number', description: 'Visible y-axis minimum; defaults to -7.' },
       y_max: { type: 'number', description: 'Visible y-axis maximum; defaults to 7.' },
-      png_scale: { type: 'number', description: 'PNG scale multiplier from 0.5 to 4; defaults to 2.' },
+      png_scale: { type: 'number', description: 'Raster multiplier from 0.5 to 4; defaults to 1. PNG pixels are width x scale while the embedded size stays the display size, because DPI metadata is written as 96 x scale. Use 2 only for HiDPI destinations.' },
       transparent: { type: 'boolean', description: 'Use a transparent PNG background; defaults to false.' },
+      axis_numbers: { type: 'boolean', description: 'Show axis tick numbers; defaults to false because the default tick labels crowd a 400-800 px figure.' },
+      axis_step: { type: 'number', description: 'Distance between axis ticks, for example 5 or 10. Use a coarser interval whenever axis_numbers is enabled.' },
+      grid: { type: 'boolean', description: 'Show the background grid; defaults to false for clean embedded figures.' },
       chrome_path: { type: 'string', description: 'Optional Chrome/Chromium/Edge executable path when automatic discovery fails.' },
     },
     output: { schema: OUTPUT_SCHEMA, render: (_args, value) => [{ type: 'text', text: renderedText(value) }] },
@@ -141,13 +231,8 @@ export function apply(ctx: Context): void {
       const cwd = sessionCwd(exec)
       const outputDir = safeWorkspacePath(cwd, args.output_dir?.trim() || '.')
       const selected = formats(args.formats, ['png', 'svg', 'ggb'])
-      const size = dimensions(args.width, args.height)
-      const bounds = view(args)
-      const pngScale = args.png_scale ?? 2
-      if (!Number.isFinite(pngScale) || pngScale < 0.5 || pngScale > 4) throw new Error('png_scale must be from 0.5 to 4')
       const rendered = await renderGeoGebra({
-        commands: args.commands, formats: selected, ...size, ...bounds, pngScale,
-        transparent: args.transparent ?? false, signal: exec.signal,
+        commands: args.commands, formats: selected, ...figureOptions(args), signal: exec.signal,
         ...(args.chrome_path?.trim() ? { chromePath: args.chrome_path.trim() } : {}),
       })
       return saveOutputs(rendered, outputDir, safeBasename(args.basename), selected)
@@ -163,11 +248,14 @@ export function apply(ctx: Context): void {
       basename: { type: 'string', description: 'Output filename without extension; defaults to the input filename.' },
       output_dir: { type: 'string', description: 'Workspace-relative output directory; defaults to the input file directory.' },
       formats: { type: 'array', items: FORMAT_SCHEMA, description: 'Any of png, svg, ggb; defaults to png and svg.' },
-      width: { type: 'integer', description: 'Applet width from 320 to 2400; defaults to 1200.' },
-      height: { type: 'integer', description: 'Applet height from 240 to 1800; defaults to 800.' },
+      width: { type: 'integer', description: 'Logical display width in CSS px from 320 to 2400; defaults to 800. This is the width the figure is embedded at.' },
+      height: { type: 'integer', description: 'Logical display height in CSS px from 240 to 1800; defaults to 600.' },
       x_min: { type: 'number' }, x_max: { type: 'number' }, y_min: { type: 'number' }, y_max: { type: 'number' },
-      png_scale: { type: 'number', description: 'PNG scale multiplier from 0.5 to 4; defaults to 2.' },
+      png_scale: { type: 'number', description: 'Raster multiplier from 0.5 to 4; defaults to 1. DPI metadata is written as 96 x scale so the embedded size stays the display size.' },
       transparent: { type: 'boolean', description: 'Use a transparent PNG background; defaults to false.' },
+      axis_numbers: { type: 'boolean', description: 'Show axis tick numbers; defaults to false because they crowd a 400-800 px figure.' },
+      axis_step: { type: 'number', description: 'Distance between axis ticks; use a coarser interval whenever axis_numbers is enabled.' },
+      grid: { type: 'boolean', description: 'Show the background grid; defaults to false.' },
       chrome_path: { type: 'string', description: 'Optional Chrome/Chromium/Edge executable path.' },
     },
     output: { schema: OUTPUT_SCHEMA, render: (_args, value) => [{ type: 'text', text: renderedText(value) }] },
@@ -181,13 +269,8 @@ export function apply(ctx: Context): void {
       const defaultDir = args.input_file.replaceAll('\\', '/').split('/').slice(0, -1).join('/') || '.'
       const outputDir = safeWorkspacePath(cwd, args.output_dir?.trim() || defaultDir)
       const selected = formats(args.formats, ['png', 'svg'])
-      const size = dimensions(args.width, args.height)
-      const bounds = view(args)
-      const pngScale = args.png_scale ?? 2
-      if (!Number.isFinite(pngScale) || pngScale < 0.5 || pngScale > 4) throw new Error('png_scale must be from 0.5 to 4')
       const rendered = await renderGeoGebra({
-        ggbBase64: input.toString('base64'), formats: selected, ...size, ...bounds, pngScale,
-        transparent: args.transparent ?? false, signal: exec.signal,
+        ggbBase64: input.toString('base64'), formats: selected, ...figureOptions(args), signal: exec.signal,
         ...(args.chrome_path?.trim() ? { chromePath: args.chrome_path.trim() } : {}),
       })
       return saveOutputs(rendered, outputDir, safeBasename(args.basename ?? inputName), selected)
