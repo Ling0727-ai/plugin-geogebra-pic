@@ -139,7 +139,7 @@ export function apply(ctx: Context): void {
     async execute(args, exec) {
       if (args.commands.length === 0 || args.commands.some(command => command.trim().length === 0)) throw new Error('commands must contain at least one non-empty command')
       const cwd = sessionCwd(exec)
-      const outputDir = safeWorkspacePath(cwd, args.output_dir ?? '.')
+      const outputDir = safeWorkspacePath(cwd, args.output_dir?.trim() || '.')
       const selected = formats(args.formats, ['png', 'svg', 'ggb'])
       const size = dimensions(args.width, args.height)
       const bounds = view(args)
@@ -148,7 +148,7 @@ export function apply(ctx: Context): void {
       const rendered = await renderGeoGebra({
         commands: args.commands, formats: selected, ...size, ...bounds, pngScale,
         transparent: args.transparent ?? false, signal: exec.signal,
-        ...(args.chrome_path === undefined ? {} : { chromePath: args.chrome_path }),
+        ...(args.chrome_path?.trim() ? { chromePath: args.chrome_path.trim() } : {}),
       })
       return saveOutputs(rendered, outputDir, safeBasename(args.basename), selected)
     },
@@ -179,7 +179,7 @@ export function apply(ctx: Context): void {
       const input = await readFile(inputPath)
       const inputName = args.input_file.replaceAll('\\', '/').split('/').at(-1)?.replace(/\.ggb$/iu, '')
       const defaultDir = args.input_file.replaceAll('\\', '/').split('/').slice(0, -1).join('/') || '.'
-      const outputDir = safeWorkspacePath(cwd, args.output_dir ?? defaultDir)
+      const outputDir = safeWorkspacePath(cwd, args.output_dir?.trim() || defaultDir)
       const selected = formats(args.formats, ['png', 'svg'])
       const size = dimensions(args.width, args.height)
       const bounds = view(args)
@@ -188,7 +188,7 @@ export function apply(ctx: Context): void {
       const rendered = await renderGeoGebra({
         ggbBase64: input.toString('base64'), formats: selected, ...size, ...bounds, pngScale,
         transparent: args.transparent ?? false, signal: exec.signal,
-        ...(args.chrome_path === undefined ? {} : { chromePath: args.chrome_path }),
+        ...(args.chrome_path?.trim() ? { chromePath: args.chrome_path.trim() } : {}),
       })
       return saveOutputs(rendered, outputDir, safeBasename(args.basename ?? inputName), selected)
     },

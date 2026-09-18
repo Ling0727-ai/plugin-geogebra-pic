@@ -27,7 +27,7 @@ test('geogebra_draw renders PNG SVG and editable GGB without a UI tab', { timeou
     const controller = new AbortController()
     const value = await tool.execute({
       commands: ['F_1=(-3,0)', 'F_2=(3,0)', 'c=Ellipse(F_1,F_2,5)'],
-      basename: 'ellipse-tool-test', formats: ['png', 'svg', 'ggb'],
+      basename: 'ellipse-tool-test', formats: ['png', 'svg', 'ggb'], output_dir: '', chrome_path: '',
       x_min: -6, x_max: 6, y_min: -4, y_max: 4,
     }, {
       signal: controller.signal,
