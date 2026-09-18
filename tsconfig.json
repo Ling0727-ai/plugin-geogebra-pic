@@ -11,6 +11,7 @@
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
+    "types": ["node", "react"],
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]

@@ -4,4 +4,10 @@ dist/
 .chrome-test/
 live-test*.png
 *.tgz
+.chrome-conic/
+.chrome-fresh-session/
+conic-*.png
+conic-*.svg
+conic-*.ggb
+fresh-session-agent.png
 *.tsbuildinfo

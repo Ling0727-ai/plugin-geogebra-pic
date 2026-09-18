@@ -13,6 +13,23 @@ A GeoGebra drawing workspace embedded in the DeepSeek Harness right Sidebar.
 - Browser-local autosave for each DSH Sidebar tab
 - Chinese and English UI copy
 - Responsive layout for docked, floating, and fullscreen Sidebar modes
+- Model-facing `geogebra_draw` and `geogebra_export` tools that work without an open UI tab
+- Bundled `geogebra-pic` Skill, automatically discoverable and loadable in fresh Sessions
+
+## Agent usage
+
+The Host plugin registers two tools:
+
+- `geogebra_draw` executes ordered GeoGebra commands and writes PNG, SVG, and/or editable GGB outputs inside the Session workspace.
+- `geogebra_export` opens an existing workspace-relative GGB file and regenerates PNG, SVG, or GGB output.
+
+The bundle also registers the `geogebra-pic` Skill directly with the DSH Skill Registry. No user-level skill symlink or conversation memory is required. A fresh Session can ask, for example:
+
+```text
+加载 geogebra-pic skill，用 geogebra_draw 画一条焦点为 (-3,0)、(3,0)，长半轴为 5 的椭圆，导出 PNG、SVG 和 GGB。
+```
+
+The model should load the Skill, call `geogebra_draw`, inspect the returned object names, and present the generated files.
 
 ## Build
 
