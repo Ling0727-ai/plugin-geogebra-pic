@@ -4,3 +4,4 @@ dist/
 .chrome-test/
 live-test*.png
 *.tgz
+*.tsbuildinfo
