@@ -118,7 +118,7 @@ export function apply(ctx: Context): void {
   })
   ctx.tools.register(defineTool({
     name: 'geogebra_draw',
-    description: 'Create a GeoGebra construction from GeoGebra commands and export PNG, SVG, and/or an editable .ggb file. Use this for function plots, Euclidean geometry, conics, analytic geometry, sliders, loci, and publication-ready mathematical figures. Outputs are written inside the current Session workspace. Commands execute in one construction and may reference objects created by earlier commands.',
+    description: 'Create a GeoGebra construction from GeoGebra commands and export PNG, SVG, and/or an editable .ggb file. Use this for function plots, Euclidean geometry, conics, analytic geometry, sliders, loci, and publication-ready mathematical figures. Outputs are written inside the current Session workspace. Commands execute in one construction and may reference objects created by earlier commands. For every visible Text object, include the plugin directive SetFontSize(label, pixels) with an explicit 10-48 px size; it is applied through the GeoGebra Apps API and persisted in every export.',
     parameters: {
       commands: { type: 'array', required: true, items: { type: 'string' }, description: 'Ordered GeoGebra commands, for example ["F_1=(-3,0)", "F_2=(3,0)", "c=Ellipse(F_1,F_2,5)"].' },
       basename: { type: 'string', description: 'Output filename without extension; defaults to geogebra-drawing.' },

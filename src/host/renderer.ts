@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 
 export type GeoGebraFormat = 'png' | 'svg' | 'ggb'
 
@@ -26,6 +27,61 @@ export interface GeoGebraRenderResult {
   readonly objects: readonly string[]
   readonly version: string
   readonly outputs: Partial<Record<GeoGebraFormat, string>>
+}
+
+interface FontSizeDirective {
+  readonly label: string
+  readonly pixels: number
+}
+
+const FONT_SIZE_DIRECTIVE = /^\s*SetFontSize\(\s*([A-Za-z][A-Za-z0-9_]*)\s*,\s*(\d+(?:\.\d+)?)\s*\)\s*$/u
+const MIN_TEXT_SIZE_PX = 10
+const MAX_TEXT_SIZE_PX = 48
+
+function splitFontSizeDirectives(commands: readonly string[] | undefined): {
+  readonly commands: readonly string[] | undefined
+  readonly fontSizes: readonly FontSizeDirective[]
+} {
+  if (commands === undefined) return { commands: undefined, fontSizes: [] }
+  const executable: string[] = []
+  const fontSizes: FontSizeDirective[] = []
+  for (const command of commands) {
+    const match = FONT_SIZE_DIRECTIVE.exec(command)
+    if (match === null) {
+      executable.push(command)
+      continue
+    }
+    const label = match[1]
+    const pixels = Number(match[2])
+    if (label === undefined || !Number.isFinite(pixels) || pixels < MIN_TEXT_SIZE_PX || pixels > MAX_TEXT_SIZE_PX) {
+      throw new Error(`SetFontSize requires a text label and a pixel size from ${MIN_TEXT_SIZE_PX} to ${MAX_TEXT_SIZE_PX}`)
+    }
+    fontSizes.push({ label, pixels })
+  }
+  return { commands: executable, fontSizes }
+}
+
+function persistGgbFontSizes(base64: string, directives: readonly FontSizeDirective[]): string {
+  if (directives.length === 0) return base64
+  const archive = unzipSync(Buffer.from(base64, 'base64'))
+  const xmlBytes = archive['geogebra.xml']
+  if (xmlBytes === undefined) throw new Error('GeoGebra GGB output is missing geogebra.xml')
+  let xml = strFromU8(xmlBytes)
+  for (const directive of directives) {
+    const elementPattern = new RegExp(`(<element\\s+type="text"\\s+label="${directive.label}"[^>]*>)([\\s\\S]*?)(</element>)`, 'u')
+    const match = elementPattern.exec(xml)
+    if (match === null || match[1] === undefined || match[2] === undefined || match[3] === undefined) {
+      throw new Error(`SetFontSize target is not a persisted text object: ${directive.label}`)
+    }
+    const multiplier = Math.round((directive.pixels / 16) * 10000) / 10000
+    const font = `<font serif="false" sizeM="${multiplier}" size="0" style="0"/>`
+    const body = /<font\b[^>]*\/>/u.test(match[2])
+      ? match[2].replace(/<font\b[^>]*\/>/u, font)
+      : `${match[2]}\t${font}\n`
+    xml = xml.replace(elementPattern, `${match[1]}${body}${match[3]}`)
+  }
+  archive['geogebra.xml'] = strToU8(xml)
+  return Buffer.from(zipSync(archive, { level: 6 })).toString('base64')
 }
 
 const HTML = `<!doctype html>
@@ -180,19 +236,27 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
       if (attempt === 299) throw new Error('GeoGebra applet did not become ready')
       await delay(100, request.signal)
     }
+    const prepared = splitFontSizeDirectives(request.commands)
     const payload = JSON.stringify({
-      commands: request.commands,
+      commands: prepared.commands,
+      fontSizes: prepared.fontSizes,
       ggbBase64: request.ggbBase64,
       formats: request.formats,
       view: [request.xMin, request.xMax, request.yMin, request.yMax],
       pngScale: request.pngScale,
       transparent: request.transparent,
     })
-    return await cdp.evaluate<GeoGebraRenderResult>(`(async () => {
+    const rendered = await cdp.evaluate<GeoGebraRenderResult>(`(async () => {
       const input = ${payload}; const api = window.ggbApplet;
       api.setErrorDialogsActive(false);
       if (input.ggbBase64) await new Promise(resolve => api.setBase64(input.ggbBase64, resolve));
       else { const result = api.evalCommand(input.commands.join('\\n')); if (result === false) throw new Error('GeoGebra rejected one or more commands'); }
+      for (const directive of input.fontSizes) {
+        if (api.getObjectType(directive.label) !== 'text') throw new Error('SetFontSize target is not a text object: ' + directive.label);
+        api.setFont(directive.label, directive.pixels, false, false);
+        const multiplier = Math.round((directive.pixels / 16) * 10000) / 10000;
+        if (!api.getXML(directive.label).includes('sizeM="' + multiplier + '"')) throw new Error('SetFontSize did not persist for ' + directive.label);
+      }
       api.setCoordSystem(...input.view); api.setUndoPoint();
       const outputs = {};
       if (input.formats.includes('png')) outputs.png = api.getPNGBase64(input.pngScale, input.transparent, 180);
@@ -200,6 +264,12 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
       if (input.formats.includes('ggb')) outputs.ggb = await new Promise(resolve => api.getBase64(resolve));
       return { objects: api.getAllObjectNames(), version: api.getVersion(), outputs };
     })()`)
+    const rawGgb = rendered.outputs.ggb
+    if (rawGgb === undefined || prepared.fontSizes.length === 0) return rendered
+    return {
+      ...rendered,
+      outputs: { ...rendered.outputs, ggb: persistGgbFontSizes(rawGgb, prepared.fontSizes) },
+    }
   } finally {
     request.signal.removeEventListener('abort', cancel)
     if (cdp !== undefined) {

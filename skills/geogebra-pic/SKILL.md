@@ -39,6 +39,100 @@ If `geogebra_draw` is not available, state that the `dsh-plugin-geogebra-pic` bu
 - Keep hidden helper values in the construction when they support verification; use GeoGebra commands such as `SetVisibleInView` where appropriate.
 - Use `SetColor`, `SetLineThickness`, `SetPointSize`, and `ShowLabel` commands for intentional styling when the standard appearance is not sufficient.
 
+## Typography contract (mandatory)
+
+Every visible GeoGebra `Text` object MUST be followed by exactly one `SetFontSize(label, pixels)` plugin directive. The renderer intercepts this directive, calls GeoGebra Apps API `setFont(label, pixels, false, false)`, verifies the persisted `sizeM`, and applies it to PNG, SVG, and GGB. Do not rely on GeoGebra's default text size.
+
+Use this hierarchy for the default `1200 × 800` canvas:
+
+| Visible role | Required size |
+|---|---:|
+| Figure title | `28` px |
+| Main formula, theorem, or highlighted conclusion | `24` px |
+| Caption, explanatory sentence, or property statement | `20` px |
+| Important point/line/conic annotation | `18` px |
+| Secondary annotation | `16` px minimum |
+
+Hard rules:
+
+- Never use a visible text size below `16` px. `SetFontSize` accepts integer or decimal sizes from `10` to `48`, but `10–15` are reserved for exceptional non-deliverable debug figures.
+- For a canvas wider than 1600 px or a dense figure intended for projection, increase every tier by 2–4 px.
+- Automatic labels created by `ShowLabel` do not satisfy this contract because their per-object font size is not controllable. In publication or teaching figures, replace important automatic labels with explicit `Text` objects and size them.
+- Place text with sufficient clearance from curves, axes, and frame edges. Font size is part of framing: recheck bounds after adding captions.
+- A construction with any visible `Text` object but no matching `SetFontSize` directive is incomplete and must not be delivered.
+
+Canonical example:
+
+```text
+title=Text("抛物线的焦点—准线定义",(-6,6))
+formula=Text("x^{2}=8y",(-6,5),false,true)
+caption=Text("点 P 到焦点与准线的距离相等",(-6,4))
+SetFontSize(title,28)
+SetFontSize(formula,24)
+SetFontSize(caption,20)
+```
+
+## GeoGebra LaTeX contract (mandatory)
+
+GeoGebra does not accept arbitrary document LaTeX. It renders a math-oriented subset through text objects. Distinguish three layers: the tool's JSON string, GeoGebra command strings, and the LaTeX content stored in a GeoGebra text object.
+
+### Preferred forms
+
+1. **Formula from an existing GeoGebra object: prefer `FormulaText`.** This avoids manual escaping and remains dynamic.
+
+```text
+eq: x^2=8y
+formula=FormulaText(eq)
+SetCoords(formula,-5,4)
+SetFontSize(formula,24)
+```
+
+2. **Static math that needs no backslash command: use the four-argument `Text` overload.** The arguments are object/string, position, substitute variables, render as LaTeX.
+
+```text
+formula=Text("x^{2}=8y",(-5,4),false,true)
+SetFontSize(formula,24)
+```
+
+3. **Dynamic object value at a position:** use substitution `true` and LaTeX `true`.
+
+```text
+d=Distance(P,F)
+dynamicValue=Text(d,(-5,3),true,true)
+SetFontSize(dynamicValue,20)
+```
+
+4. **LaTeX requiring `\\frac`, `\\sqrt`, `\\text`, `\\mathrm`, `\\quad`, Greek commands, or similar:** never type the backslash directly inside a quoted GeoGebra string. The GeoGebra command parser may consume it. Construct a literal backslash with `UnicodeToText({92})`, concatenate the LaTeX source, and hide the helper text objects.
+
+```text
+slash=UnicodeToText({92})
+latexCaption=slash+"text{焦点 }F"+slash+"quad x^{2}=8y"
+caption=Text(latexCaption,(-5,3),false,true)
+SetFontSize(caption,20)
+SetVisibleInView(slash,1,false)
+SetVisibleInView(latexCaption,1,false)
+```
+
+Fraction example:
+
+```text
+slash=UnicodeToText({92})
+latexFraction=slash+"frac{1}{2}"
+fraction=Text(latexFraction,(-5,2),false,true)
+SetFontSize(fraction,24)
+SetVisibleInView(slash,1,false)
+SetVisibleInView(latexFraction,1,false)
+```
+
+### LaTeX restrictions
+
+- Do not wrap content in `$...$`, `$$...$$`, `\\(...\\)`, or `\\[...\\]`; GeoGebra's LaTeX flag already selects math rendering.
+- Do not use document commands such as `\\documentclass`, packages, preambles, `figure`, `tikzpicture`, or external macros.
+- Avoid unsupported environments and custom command definitions. Prefer `FormulaText` or simple constructs: superscripts/subscripts, `\\frac`, `\\sqrt`, `\\text`, `\\mathrm`, `\\mathbf`, Greek letters, relations, and spacing commands.
+- Plain Chinese inside a LaTeX formula must be inside `\\text{...}`, constructed through the `slash` helper above. Raw Chinese outside `\\text` may render inconsistently.
+- Do not write direct command strings such as `Text("\\frac{1}{2}",...)`; real GeoGebra testing shows the parser can render this as the literal text `frac12`.
+- After rendering, visually inspect at least the PNG or SVG. Reject output that displays literal tokens such as `text`, `frac`, `quad`, `mathrm`, braces, or missing backslashes.
+
 ## Reliable patterns
 
 ### Function graph

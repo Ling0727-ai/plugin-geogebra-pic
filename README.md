@@ -15,6 +15,8 @@ A GeoGebra drawing workspace embedded in the DeepSeek Harness right Sidebar.
 - Responsive layout for docked, floating, and fullscreen Sidebar modes
 - Model-facing `geogebra_draw` and `geogebra_export` tools that work without an open UI tab
 - Bundled `geogebra-pic` Skill, automatically discoverable and loadable in fresh Sessions
+- Deterministic `SetFontSize(textLabel, pixels)` directives persisted across PNG, SVG, and GGB exports
+- GeoGebra-specific LaTeX guidance covering `FormulaText`, `Text(..., LaTeX=true)`, backslash construction, and unsupported document LaTeX
 
 ## Agent usage
 
@@ -29,7 +31,7 @@ The bundle also registers the `geogebra-pic` Skill directly with the DSH Skill R
 加载 geogebra-pic skill，用 geogebra_draw 画一条焦点为 (-3,0)、(3,0)，长半轴为 5 的椭圆，导出 PNG、SVG 和 GGB。
 ```
 
-The model should load the Skill, call `geogebra_draw`, inspect the returned object names, and present the generated files.
+The model should load the Skill, call `geogebra_draw`, inspect the returned object names, and present the generated files. Every visible `Text` object must have an explicit `SetFontSize(label, pixels)` directive; the plugin interprets sizes as CSS pixels from 10–48 and persists them through the GeoGebra Apps API. For LaTeX, follow the bundled Skill rather than inserting arbitrary document LaTeX into `Text` commands.
 
 ## Build
 
