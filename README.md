@@ -16,6 +16,8 @@ A GeoGebra drawing workspace embedded in the DeepSeek Harness right Sidebar.
 - Model-facing `geogebra_draw` and `geogebra_export` tools that work without an open UI tab
 - Bundled `geogebra-pic` Skill, automatically discoverable and loadable in fresh Sessions
 - Deterministic `SetFontSize(textLabel, pixels)` directives persisted across PNG, SVG, and GGB exports
+- Embed-first figure sizing: `width` / `height` are the logical display size (default `800 × 600`), PNG DPI tracks the raster multiplier so documents insert at that size, and SVG exports carry a `viewBox`
+- Axis tick numbers and the background grid are off by default for clean 400–800 px embeds, with `axis_numbers`, `axis_step`, and `grid` to bring them back
 - GeoGebra-specific LaTeX guidance covering `FormulaText`, `Text(..., LaTeX=true)`, backslash construction, and unsupported document LaTeX
 
 ## Agent usage
@@ -31,7 +33,7 @@ The bundle also registers the `geogebra-pic` Skill directly with the DSH Skill R
 加载 geogebra-pic skill，用 geogebra_draw 画一条焦点为 (-3,0)、(3,0)，长半轴为 5 的椭圆，导出 PNG、SVG 和 GGB。
 ```
 
-The model should load the Skill, call `geogebra_draw`, inspect the returned object names, and present the generated files. Every visible `Text` object must have an explicit `SetFontSize(label, pixels)` directive; the plugin interprets sizes as CSS pixels from 10–48 and persists them through the GeoGebra Apps API. For LaTeX, follow the bundled Skill rather than inserting arbitrary document LaTeX into `Text` commands.
+The model should load the Skill, call `geogebra_draw`, inspect the returned object names, and present the generated files. Figures are authored at their embedded display size, so `width` / `height` default to `800 × 600` and every visible `Text` object must have an explicit `SetFontSize(label, pixels)` directive; the plugin interprets sizes as CSS pixels from 12–48, rejects smaller values, and reports `minFontPx` plus `minLegibleWidth` so the safe embed width is explicit. For LaTeX, follow the bundled Skill rather than inserting arbitrary document LaTeX into `Text` commands.
 
 ## Build
 
