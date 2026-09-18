@@ -1,0 +1,52 @@
+{
+  "name": "dsh-plugin-geogebra-pic",
+  "version": "0.1.0",
+  "description": "GeoGebra drawing workspace for DeepSeek Harness",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "lib/index.js",
+    "lib/client.js",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "gen:comp": "node scripts/generate-component.mjs",
+    "lint:struct": "node scripts/check-structure.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "pnpm --dir ../../deepseek-harness exec tsc -p ../dsh-plugin/geogebra-pic/tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0",
+    "react": ">=18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-client-locale": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.6-alpha.2",
+    "@types/react": "~18.3.1",
+    "react": "^18.2.0",
+    "typescript": "^6.0.3"
+  },
+  "license": "MIT"
+}

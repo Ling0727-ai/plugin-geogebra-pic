@@ -1,0 +1,6 @@
+lib/
+node_modules/
+dist/
+.chrome-test/
+live-test*.png
+*.tgz
