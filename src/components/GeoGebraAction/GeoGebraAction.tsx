@@ -7,9 +7,11 @@ import css from './GeoGebraAction.module.css'
 export function GeoGebraAction(props: GeoGebraActionProps): ReactNode {
   const open = useGeoGebraAction(props)
   return (
-    <button type="button" className={css.trigger} onClick={open} title={props.t('action.open')}>
-      <IconDataOutline16 />
-      <span>{props.t('type.label')}</span>
-    </button>
+    <div className={css.root} data-geogebra-action>
+      <button type="button" className={css.trigger} onClick={open} title={props.t('action.open')}>
+        <IconDataOutline16 size={14} />
+        <span>{props.t('type.label')}</span>
+      </button>
+    </div>
   )
 }

@@ -1,4 +1,6 @@
-lib/
+# lib/ is committed on purpose. A git-hosted install copies tracked files only
+# and never runs `build` (which needs the adjacent deepseek-harness checkout), so
+# an ignored lib/ ships a package whose main/exports point at nothing.
 node_modules/
 dist/
 .chrome-test/

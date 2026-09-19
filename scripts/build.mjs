@@ -1,7 +1,8 @@
-import { copyFile, mkdir, rm } from 'node:fs/promises'
+import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { BUILD_RECORD, sourceFingerprint } from './dist-manifest.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const harnessRoot = resolve(projectRoot, '..', '..', 'deepseek-harness')
@@ -19,7 +20,17 @@ try {
     { cwd: projectRoot, stdio: 'inherit' },
   )
   if (result.error !== undefined) throw result.error
-  if (result.status !== 0) process.exitCode = result.status ?? 1
+  if (result.status !== 0) {
+    process.exitCode = result.status ?? 1
+  } else {
+    // lib/ is committed, so the artifacts must record which sources produced
+    // them; scripts/check-dist.mjs compares this digest to catch a build that
+    // was forgotten after a src/ edit.
+    await writeFile(
+      join(projectRoot, BUILD_RECORD),
+      `${JSON.stringify({ fingerprint: sourceFingerprint(projectRoot) }, null, 2)}\n`,
+    )
+  }
 } finally {
   await rm(manifestDirectory, { recursive: true, force: true })
 }

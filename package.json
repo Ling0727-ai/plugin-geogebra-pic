@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-geogebra-pic",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "GeoGebra drawing workspace for DeepSeek Harness",
   "type": "module",
   "main": "lib/index.js",
@@ -13,6 +13,7 @@
     "cordis.patch.yml",
     "lib/index.js",
     "lib/client.js",
+    "lib/client.js.map",
     "skills/**/*.md",
     "README.md"
   ],
@@ -31,8 +32,9 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "gen:comp": "node scripts/generate-component.mjs",
-    "lint:struct": "node scripts/check-structure.mjs",
-    "test": "node --test tests/*.test.mjs",
+    "check:dist": "node scripts/check-dist.mjs",
+    "lint:struct": "node scripts/check-structure.mjs && node scripts/check-dist.mjs",
+    "test": "node scripts/check-dist.mjs && node --test tests/*.test.mjs",
     "typecheck": "pnpm --dir ../../deepseek-harness exec tsc -p ../dsh-plugin/geogebra-pic/tsconfig.json --noEmit"
   },
   "peerDependencies": {

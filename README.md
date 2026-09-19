@@ -44,9 +44,26 @@ pnpm run lint:struct
 pnpm run build
 ```
 
-The build emits `lib/index.js` and `lib/client.js`. The project build script uses the adjacent DeepSeek Harness checkout at `../../deepseek-harness` for its client-bundle preset.
+The build emits `lib/index.js`, `lib/client.js`, and `lib/client.js.map`. The project build script uses the adjacent DeepSeek Harness checkout at `../../deepseek-harness` for its client-bundle preset, which is why a checkout is needed to build but not to install.
+
+`lib/` is committed on purpose. A git-hosted install receives tracked files only and never runs `build`, so ignoring `lib/` ships a package whose `main` and `exports` point at nothing and the Host Loader reports `failed to import`. After changing `src/`, run `pnpm run build` and commit the regenerated `lib/` in the same commit: `pnpm run lint:struct` (also part of `pnpm test`) fails when a published entry point is missing, untracked, or built from older sources.
 
 ## Install
+
+### From GitHub
+
+```sh
+pnpm dsh plugin --profile web add github:Ling0727-ai/plugin-geogebra-pic
+```
+
+The built `lib/` is inside the repository, so this needs no build step and no `allowBuilds` permission — the package arrives ready to activate. To pick up a newer revision, re-add the plugin after removing it, since the lockfile pins the commit it resolved:
+
+```sh
+pnpm dsh plugin --profile web remove dsh-plugin-geogebra-pic
+pnpm dsh plugin --profile web add github:Ling0727-ai/plugin-geogebra-pic
+```
+
+### From a local checkout
 
 From the DeepSeek Harness checkout:
 
