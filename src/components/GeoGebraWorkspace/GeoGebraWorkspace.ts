@@ -4,7 +4,10 @@ import type { GeoGebraWorkspaceProps } from './GeoGebraWorkspace.api.ts'
 import {
   AUTOSAVE_DELAY_MS,
   GEOGEBRA_SCRIPT_URL,
+  RESTORE_TIMEOUT_MS,
+  SCRIPT_LOAD_TIMEOUT_MS,
   STORAGE_PREFIX,
+  UPDATE_COALESCE_MS,
   type AppletStatus,
   type GeoGebraApi,
   type GeoGebraObject,
@@ -19,20 +22,26 @@ function loadGeoGebraScript(): Promise<void> {
   if (window.GGBApplet !== undefined) return Promise.resolve()
   if (scriptPromise !== undefined) return scriptPromise
   const pending = new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GEOGEBRA_SCRIPT_URL}"]`)
-    const script = existing ?? document.createElement('script')
-    const loaded = (): void => {
-      if (window.GGBApplet !== undefined) resolve()
-      else reject(new Error('GeoGebra constructor was not exposed'))
-    }
-    script.addEventListener('load', loaded, { once: true })
-    script.addEventListener('error', () => { reject(new Error('GeoGebra script failed to load')) }, { once: true })
-    if (existing === null) {
-      script.src = GEOGEBRA_SCRIPT_URL
-      script.async = true
-      script.dataset.geogebraPic = 'true'
-      document.head.append(script)
-    }
+    // A tag whose load/error already fired never fires again, so a retry has to inject a fresh one:
+    // reusing the old element would leave this promise pending forever and the pane stuck on its
+    // spinner with no way back. A deadline covers a request that neither loads nor errors.
+    for (const stale of document.querySelectorAll('script[data-geogebra-pic="true"]')) stale.remove()
+    const script = document.createElement('script')
+    const settle = (action: () => void): void => { clearTimeout(timer); action() }
+    const timer = setTimeout(() => {
+      settle(() => { reject(new Error('GeoGebra script load timed out')) })
+    }, SCRIPT_LOAD_TIMEOUT_MS)
+    script.addEventListener('load', () => {
+      settle(() => {
+        if (window.GGBApplet !== undefined) resolve()
+        else reject(new Error('GeoGebra constructor was not exposed'))
+      })
+    }, { once: true })
+    script.addEventListener('error', () => { settle(() => { reject(new Error('GeoGebra script failed to load')) }) }, { once: true })
+    script.src = GEOGEBRA_SCRIPT_URL
+    script.async = true
+    script.dataset.geogebraPic = 'true'
+    document.head.append(script)
   }).catch((error: unknown) => {
     scriptPromise = undefined
     throw error
@@ -117,6 +126,8 @@ export function useGeoGebraWorkspace(
     if (host === null) return
     let disposed = false
     let resizeObserver: ResizeObserver | undefined
+    let restoreTimer: ReturnType<typeof setTimeout> | undefined
+    let coalesceTimer: ReturnType<typeof setTimeout> | undefined
     let listeners: { add: (name: string) => void; remove: (name: string) => void; update: (name: string) => void } | undefined
     setStatus('loading')
     host.replaceChildren()
@@ -147,15 +158,46 @@ export function useGeoGebraWorkspace(
           api.enableShiftDragZoom(true)
           api.setGridVisible(1, true)
           api.setAxesVisible(true, true)
-          const changed = (): void => { syncObjects(); saveConstruction() }
+          // Update events fire continuously while a point is dragged, and each rebuild costs an
+          // applet call per object plus a full re-render, so a large construction would freeze the
+          // pane. Coalesce them into one rebuild per quiet interval.
+          const changed = (): void => {
+            if (coalesceTimer !== undefined) clearTimeout(coalesceTimer)
+            coalesceTimer = setTimeout(() => {
+              coalesceTimer = undefined
+              if (disposed) return
+              syncObjects()
+              saveConstruction()
+            }, UPDATE_COALESCE_MS)
+          }
           listeners = { add: changed, remove: changed, update: changed }
           api.registerAddListener(listeners.add)
           api.registerRemoveListener(listeners.remove)
           api.registerUpdateListener(listeners.update)
-          const ready = (): void => { syncObjects(); setStatus('ready') }
+          const ready = (): void => {
+            if (disposed) return
+            syncObjects()
+            setStatus('ready')
+          }
           const saved = window.localStorage.getItem(`${STORAGE_PREFIX}${persistenceKey}`)
-          if (saved !== null) api.setBase64(saved, ready)
-          else ready()
+          if (saved === null) {
+            ready()
+          } else {
+            // Error dialogs are off, so a corrupt or truncated construction can leave GeoGebra
+            // without ever invoking the callback: reach 'ready' on a deadline instead of pinning
+            // the spinner forever with no reachable retry button.
+            restoreTimer = setTimeout(() => { restoreTimer = undefined; ready() }, RESTORE_TIMEOUT_MS)
+            const restored = (): void => {
+              if (restoreTimer !== undefined) { clearTimeout(restoreTimer); restoreTimer = undefined }
+              ready()
+            }
+            try {
+              api.setBase64(saved, restored)
+            } catch (error) {
+              console.warn('GeoGebra restore failed:', error)
+              restored()
+            }
+          }
           resizeObserver = new ResizeObserver(() => {
             if (host.clientWidth > 0 && host.clientHeight > 0) api.setSize(host.clientWidth, host.clientHeight)
           })
@@ -172,6 +214,8 @@ export function useGeoGebraWorkspace(
       disposed = true
       resizeObserver?.disconnect()
       if (saveTimerRef.current !== undefined) clearTimeout(saveTimerRef.current)
+      if (restoreTimer !== undefined) clearTimeout(restoreTimer)
+      if (coalesceTimer !== undefined) clearTimeout(coalesceTimer)
       const api = apiRef.current
       if (api !== undefined && listeners !== undefined) {
         api.unregisterAddListener(listeners.add)

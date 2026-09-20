@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
+import { CdpClient, CDP_CLOSE_TIMEOUT_MS, abortError } from './cdp.ts'
 import {
   clusterSvgTexts,
   parseSvgObstaclePoints,
@@ -467,17 +468,17 @@ function findChrome(explicit?: string): string {
   return found
 }
 
-function abortError(): Error {
-  const error = new Error('GeoGebra rendering was cancelled')
-  error.name = 'AbortError'
-  return error
-}
-
 async function delay(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) throw abortError()
+  if (signal.aborted) throw abortError(signal.reason)
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms)
-    signal.addEventListener('abort', () => { clearTimeout(timer); reject(abortError()) }, { once: true })
+    // The abort listener has to come off when the timer wins: the applet-readiness loop calls
+    // this hundreds of times per render, and `{ once: true }` only detaches on abort.
+    const onAbort = (): void => { clearTimeout(timer); reject(abortError(signal.reason)) }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -491,58 +492,6 @@ async function debuggerAddress(profile: string, signal: AbortSignal): Promise<{ 
     await delay(50, signal)
   }
   throw new Error('Chrome DevTools endpoint did not become ready')
-}
-
-interface RpcWaiter { resolve(value: unknown): void; reject(error: Error): void }
-
-class CdpClient {
-  private nextId = 0
-  private readonly pending = new Map<number, RpcWaiter>()
-  private constructor(private readonly socket: WebSocket) {
-    socket.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { id?: number; result?: unknown; error?: { message?: string } }
-      if (message.id === undefined) return
-      const waiter = this.pending.get(message.id)
-      if (waiter === undefined) return
-      this.pending.delete(message.id)
-      if (message.error !== undefined) waiter.reject(new Error(message.error.message ?? 'Chrome DevTools error'))
-      else waiter.resolve(message.result)
-    })
-  }
-
-  static async connect(url: string, signal: AbortSignal): Promise<CdpClient> {
-    if (signal.aborted) throw abortError()
-    const socket = new WebSocket(url)
-    await new Promise<void>((resolve, reject) => {
-      socket.addEventListener('open', () => { resolve() }, { once: true })
-      socket.addEventListener('error', () => { reject(new Error('Could not connect to Chrome DevTools')) }, { once: true })
-      signal.addEventListener('abort', () => { socket.close(); reject(abortError()) }, { once: true })
-    })
-    return new CdpClient(socket)
-  }
-
-  call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    const id = ++this.nextId
-    this.socket.send(JSON.stringify({ id, method, params }))
-    return new Promise<T>((resolve, reject) => { this.pending.set(id, { resolve: value => { resolve(value as T) }, reject }) })
-  }
-
-  async evaluate<T>(expression: string): Promise<T> {
-    const response = await this.call<{
-      result: { value?: T }
-      exceptionDetails?: { text?: string; exception?: { description?: string } }
-    }>('Runtime.evaluate', {
-      expression, awaitPromise: true, returnByValue: true,
-    })
-    if (response.exceptionDetails !== undefined) {
-      // The description carries the actual page error; text is often just "Uncaught".
-      const description = response.exceptionDetails.exception?.description ?? response.exceptionDetails.text
-      throw new Error(description ?? 'GeoGebra evaluation failed')
-    }
-    return response.result.value as T
-  }
-
-  close(): void { this.socket.close() }
 }
 
 function terminate(processHandle: ChildProcess): void {
@@ -787,7 +736,9 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
   } finally {
     request.signal.removeEventListener('abort', cancel)
     if (cdp !== undefined) {
-      try { await cdp.call('Browser.close') } catch { /* browser may already be gone */ }
+      // Best-effort and bounded: an abort has already killed the browser, so this reply may never
+      // arrive, and teardown must never outlive the render it closes.
+      try { await cdp.call('Browser.close', {}, CDP_CLOSE_TIMEOUT_MS) } catch { /* browser may already be gone */ }
       cdp.close()
     }
     terminate(child)
@@ -796,6 +747,7 @@ export async function renderGeoGebra(request: GeoGebraRenderRequest): Promise<Ge
       const timer = setTimeout(resolve, 2_000)
       child.once('exit', () => { clearTimeout(timer); resolve() })
     })
-    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    // A profile directory that Windows still holds open must not replace the render's outcome.
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {})
   }
 }

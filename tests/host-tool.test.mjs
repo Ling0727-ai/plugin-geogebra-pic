@@ -34,9 +34,9 @@ function textCount(svg) {
   return (svg.match(/<text/g) ?? []).length
 }
 
-function run(tool, args, cwd) {
+function run(tool, args, cwd, signal = new AbortController().signal) {
   return tool.execute(args, {
-    signal: new AbortController().signal,
+    signal,
     agent: { session: { header: { cwd } } },
     callId: 'test', name: 'geogebra_draw', arguments: {}, token: {},
   })
@@ -330,6 +330,36 @@ test('a genuinely bad command still fails the whole call', { timeout: 120_000 },
       run(tool, { commands: ['A=(0,0)', 'B=('], basename: 'bad2', formats: ['png'], output_dir: '', chrome_path: '' }, cwd),
       /GeoGebra rejected 1 command\(s\): B=\(/u,
     )
+  } finally {
+    await rm(cwd, { recursive: true, force: true })
+  }
+})
+
+/**
+ * The tool-call timeout policy aborts `exec.signal` at the budget but still awaits the tool
+ * promise, so a render that ignores its abort does not fail — it freezes the session forever.
+ * Killing Chrome mid-render used to strand the in-flight DevTools request, which is exactly the
+ * "plugin hangs" report; the abort must settle the call within the teardown window.
+ */
+test('an aborted render settles instead of hanging the tool call', { timeout: 120_000 }, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'geogebra-tool-abort-'))
+  try {
+    const tool = collectPlugin().tools.get('geogebra_draw')
+    assert.ok(tool)
+    const controller = new AbortController()
+    const call = run(tool, {
+      commands: ['A=(0,0)', 'B=(1,1)', 'f=Line(A,B)'],
+      basename: 'aborted', formats: ['png'], output_dir: '', chrome_path: '',
+    }, cwd, controller.signal)
+    // Abort while the applet is still booting, so a DevTools request is in flight.
+    setTimeout(() => controller.abort(), 3_000)
+    const settled = await Promise.race([
+      call.then(() => ({ state: 'resolved' }), error => ({ state: 'rejected', error })),
+      new Promise(resolve => { setTimeout(() => { resolve({ state: 'hung' }) }, 30_000) }),
+    ])
+    assert.notEqual(settled.state, 'hung', 'an aborted render must settle, not hang the tool call')
+    assert.equal(settled.state, 'rejected')
+    assert.equal(settled.error.name, 'AbortError')
   } finally {
     await rm(cwd, { recursive: true, force: true })
   }

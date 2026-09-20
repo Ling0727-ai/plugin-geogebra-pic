@@ -1,6 +1,15 @@
 export const GEOGEBRA_SCRIPT_URL = 'https://www.geogebra.org/apps/deployggb.js'
 export const STORAGE_PREFIX = 'dsh-geogebra-pic:'
 export const AUTOSAVE_DELAY_MS = 500
+/**
+ * The pane may only leave `loading` through a callback, so every wait that has no reply of its own
+ * needs a deadline: a CDN request that neither loads nor errors, or a `setBase64` whose callback
+ * never fires, would otherwise pin the spinner forever with no reachable retry button.
+ */
+export const SCRIPT_LOAD_TIMEOUT_MS = 20_000
+export const RESTORE_TIMEOUT_MS = 15_000
+/** Update events fire continuously while dragging; the object panel does not need every one. */
+export const UPDATE_COALESCE_MS = 120
 
 export const EXAMPLES = [
   { id: 'function', labelKey: 'example.function', command: 'f(x) = sin(x)' },
