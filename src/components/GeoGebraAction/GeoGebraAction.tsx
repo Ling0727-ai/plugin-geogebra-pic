@@ -1,4 +1,4 @@
-import { IconDataOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconDataOutline16 } from '../../client/icons.ts'
 import type { ReactNode } from 'react'
 import { useGeoGebraAction } from './GeoGebraAction.ts'
 import type { GeoGebraActionProps } from './GeoGebraAction.api.ts'

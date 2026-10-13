@@ -1,5 +1,5 @@
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
-import { IconDataOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconDataOutline16 } from './icons.ts'
 import type { SidebarRightTabDefinition } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import type {} from './locales.ts'
 

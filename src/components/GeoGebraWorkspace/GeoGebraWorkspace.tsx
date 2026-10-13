@@ -9,7 +9,7 @@ import {
   IconPlayOutline16,
   IconRefreshOutline16,
   IconTrashOutline16,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+} from '../../client/icons.ts'
 import type { ReactNode } from 'react'
 import { useGeoGebraWorkspace } from './GeoGebraWorkspace.ts'
 import type { GeoGebraWorkspaceProps } from './GeoGebraWorkspace.api.ts'
