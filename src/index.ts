@@ -397,7 +397,8 @@ export function apply(ctx: Context): void {
       const cwd = sessionCwd(exec)
       const outputDir = safeWorkspacePath(cwd, args.output_dir?.trim() || '.')
       const selected = formats(args.formats, ['png', 'svg', 'ggb'])
-      const chart = args.series === undefined ? undefined : chartPlan(args)
+      const series = args.series?.length === 0 ? undefined : args.series
+      const chart = series === undefined ? undefined : chartPlan({ ...args, series })
       if (chart === undefined && args.commands === undefined) {
         throw new Error('Provide either commands or series')
       }

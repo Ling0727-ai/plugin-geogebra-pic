@@ -153,6 +153,11 @@ test('geogebra_draw rejects text below the embed floor and invalid figure option
       run(tool, { commands: ['f(x)=x'], series: [{ points: [[0, 1], [1, 2]] }], basename: 'both', output_dir: '', chrome_path: '' }, cwd),
       /not both/u,
     )
+    const emptySeries = await run(tool, {
+      commands: ['f(x)=x'], series: [], basename: 'empty-series', formats: ['svg'], output_dir: '', chrome_path: '',
+    }, cwd)
+    assert.deepEqual(emptySeries.objects, ['f'])
+    assert.equal(emptySeries.files.length, 1)
     // Either the parameter enum or the tool's own validation rejects it.
     await assert.rejects(
       run(tool, { commands: ['f(x)=x'], basename: 'labels', output_dir: '', chrome_path: '', label_placement: 'clever' }, cwd),
