@@ -398,14 +398,15 @@ export function apply(ctx: Context): void {
       const outputDir = safeWorkspacePath(cwd, args.output_dir?.trim() || '.')
       const selected = formats(args.formats, ['png', 'svg', 'ggb'])
       const series = args.series?.length === 0 ? undefined : args.series
+      const commandInput = args.commands?.length === 0 ? undefined : args.commands
       const chart = series === undefined ? undefined : chartPlan({ ...args, series })
-      if (chart === undefined && args.commands === undefined) {
+      if (chart === undefined && commandInput === undefined) {
         throw new Error('Provide either commands or series')
       }
-      if (chart !== undefined && args.commands !== undefined) {
+      if (chart !== undefined && commandInput !== undefined) {
         throw new Error('Provide either commands or series, not both')
       }
-      const commands = chart?.commands ?? args.commands ?? []
+      const commands = chart?.commands ?? commandInput ?? []
       if (commands.length === 0 || commands.some(command => command.trim().length === 0)) {
         throw new Error('commands must contain at least one non-empty command')
       }
